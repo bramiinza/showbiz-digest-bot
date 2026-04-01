@@ -32,7 +32,8 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}     # ← Вот это было пропущено или не работало раньше
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          RUN_MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}   # ← это главное нововведение
         run: python main.py
 
       - name: Commit seen_articles.json if changed
