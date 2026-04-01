@@ -2,7 +2,7 @@ name: Daily Showbiz Digest
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # каждый день в 7:00 UTC ≈ 10:00 МСК
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
@@ -13,12 +13,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4   # можно оставить v4 — он уже поддерживает, но warning иногда остаётся
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5   # или обнови до v6, если хочешь
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -32,6 +32,7 @@ jobs:
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}     # ← Вот это было пропущено или не работало раньше
         run: python main.py
 
       - name: Commit seen_articles.json if changed
