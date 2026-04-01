@@ -8,8 +8,6 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import time
-import difflib
-import re
 from groq import Groq
 
 # Настройки
@@ -25,6 +23,7 @@ SMTP_EMAIL = os.getenv("SMTP_EMAIL")
 SMTP_PASS = os.getenv("SMTP_PASS")
 TO_EMAIL = os.getenv("TO_EMAIL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+RUN_MODE = os.getenv("RUN_MODE", "auto")   # manual или auto
 
 SEEN_FILE = "seen_articles.json"
 
@@ -60,7 +59,7 @@ def get_full_text(url):
     except:
         return ""
 
-print("=== Запуск ИИ-дайджеста шоу-бизнеса ===")
+print(f"=== Запуск ИИ-дайджеста (режим: {RUN_MODE}) ===")
 
 raw_articles = []
 for source in SOURCES:
@@ -71,8 +70,11 @@ for source in SOURCES:
             if not is_recent(entry):
                 continue
             url = entry.link
-            if url in seen:
+            
+            # В ручном режиме НЕ пропускаем уже виденные
+            if RUN_MODE == "auto" and url in seen:
                 continue
+
             full_text = get_full_text(url)
             article = {
                 "url": url,
@@ -91,24 +93,30 @@ print(f"Собрано сырых статей: {len(raw_articles)}")
 if not raw_articles:
     print("Нет новых статей.")
 else:
-       # === ИИ-обработка ===
+    # === ИИ-обработка с фильтром по мировым звёздам ===
     if not GROQ_API_KEY:
-        print("❌ GROQ_API_KEY не настроен. Пропускаем ИИ-обработку.")
-        digest_html = "<h1>Шоу-биз дайджест</h1><p>Не удалось подключиться к ИИ. Сырые статьи:</p>"
-        for art in raw_articles:
-            digest_html += f"<h2>{art['title']}</h2><p>{art['full_text'][:500]}...</p><hr>"
+        print("❌ GROQ_API_KEY не настроен.")
+        digest_html = "<h1>Шоу-биз дайджест</h1><p>ИИ не подключён.</p>"
     else:
         client = Groq(api_key=GROQ_API_KEY)
         
-        prompt = f"""Ты — главный редактор русского таблоида. 
+        prompt = f"""Ты — главный редактор русского таблоида о шоу-бизнесе.
 Сегодня {datetime.now().strftime('%d %B %Y')}.
-Сделай яркий и вкусный дайджест из этих свежих новостей шоу-бизнеса.
+Режим запуска: {RUN_MODE}.
 
-Выбери самые интересные, придумай кликбейтные русские заголовки, напиши живые summary (3–6 предложений).
+Сделай максимально яркий и вкусный дайджест ТОЛЬКО по мировым звёздам, которых хорошо знают в России 
+(Taylor Swift, Zendaya, Kardashians, Leonardo DiCaprio, The Rock, Kylie Jenner, Timothée Chalamet, Billie Eilish, Drake, Marvel-актёры и подобные глобальные имена).
 
-Верни только готовый HTML без лишнего текста.
+Пропускай новости про чисто американских локальных знаменитостей, которых в России почти никто не знает.
 
-Вот статьи:
+Выбери самые интересные 8–12 новостей (или все, если их мало).
+Для каждой:
+- Придумай кликбейтный, но честный русский заголовок.
+- Напиши живое summary (3–6 предложений) в таблоидном стиле.
+
+Верни ответ строго в формате HTML (никакого лишнего текста).
+
+Вот сырые статьи:
 """
         for i, art in enumerate(raw_articles, 1):
             prompt += f"\n{i}. [{art['source']}] Заголовок: {art['title']}\nТекст: {art['full_text'][:3500]}\n---\n"
@@ -126,7 +134,7 @@ else:
     # Отправка письма
     if SMTP_EMAIL and SMTP_PASS and TO_EMAIL:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"🎭 Шоу-биз: самое горячее — {datetime.now().strftime('%d.%m.%Y')}"
+        msg["Subject"] = f"🎭 Шоу-биз: самое горячее — {datetime.now().strftime('%d.%m.%Y')} ({RUN_MODE})"
         msg["From"] = SMTP_EMAIL
         msg["To"] = TO_EMAIL
         msg.attach(MIMEText(digest_html, "html", "utf-8"))
@@ -135,11 +143,11 @@ else:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
                 server.login(SMTP_EMAIL, SMTP_PASS)
                 server.send_message(msg)
-            print("✅ Красивый ИИ-дайджест успешно отправлен!")
+            print("✅ ИИ-дайджест успешно отправлен!")
         except Exception as e:
             print(f"❌ Ошибка отправки: {e}")
 
-# Обновление истории
+# Обновляем историю (в обоих режимах)
 for art in raw_articles:
     if art["url"] not in seen:
         seen.append(art["url"])
