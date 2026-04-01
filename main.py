@@ -1,7 +1,6 @@
 import feedparser
 import requests
 from bs4 import BeautifulSoup
-from deep_translator import GoogleTranslator
 import json
 import os
 from datetime import datetime, timedelta
@@ -11,6 +10,7 @@ from email.mime.text import MIMEText
 import time
 import difflib
 import re
+from groq import Groq
 
 # Настройки
 SOURCES = [
@@ -24,6 +24,7 @@ SOURCES = [
 SMTP_EMAIL = os.getenv("SMTP_EMAIL")
 SMTP_PASS = os.getenv("SMTP_PASS")
 TO_EMAIL = os.getenv("TO_EMAIL")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 SEEN_FILE = "seen_articles.json"
 
@@ -37,54 +38,31 @@ if os.path.exists(SEEN_FILE):
         seen = []
 
 def is_recent(entry):
-    """Проверяем, что статья за последние 24 часа"""
     for date_field in ["published", "updated", "pubDate"]:
         if date_field in entry:
             try:
-                pub_date = feedparser.parse(entry[date_field]).feed.get("published_parsed") or entry.get("published_parsed")
+                pub_date = feedparser.parse(entry[date_field]).feed.get("published_parsed")
                 if pub_date:
                     pub_dt = datetime(*pub_date[:6])
                     return pub_dt > datetime.now() - timedelta(days=1)
             except:
                 continue
-    # Если дату не удалось распарсить — берём статью (на всякий случай)
     return True
 
 def get_full_text(url):
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
         soup = BeautifulSoup(r.text, "lxml")
         for tag in soup(["script", "style", "header", "footer", "nav", "aside"]):
             tag.decompose()
-        text = soup.get_text(separator="\n", strip=True)
-        return "\n".join(text.splitlines())[:4000]  # ограничиваем
-    except Exception as e:
-        print(f"Не удалось получить текст {url}: {e}")
+        return soup.get_text(separator="\n", strip=True)[:5000]
+    except:
         return ""
 
-def translate_text(text):
-    if not text or len(text.strip()) < 10:
-        return text
-    try:
-        translator = GoogleTranslator(source='auto', target='ru')
-        return translator.translate(text)
-    except Exception as e:
-        print(f"Ошибка перевода: {e}")
-        return text
+print("=== Запуск ИИ-дайджеста шоу-бизнеса ===")
 
-def normalize_text(text):
-    return re.sub(r'\s+', ' ', text.lower().strip())
-
-def articles_similar(a, b, threshold=0.70):
-    text_a = normalize_text(a.get("title", "") + " " + a.get("summary", "")[:300])
-    text_b = normalize_text(b.get("title", "") + " " + b.get("summary", "")[:300])
-    return difflib.SequenceMatcher(None, text_a, text_b).ratio() > threshold
-
-print("=== Запуск шоу-биз дайджеста ===")
-
-new_articles = []
+raw_articles = []
 for source in SOURCES:
     print(f"→ Собираем {source['name']}...")
     try:
@@ -95,7 +73,6 @@ for source in SOURCES:
             url = entry.link
             if url in seen:
                 continue
-
             full_text = get_full_text(url)
             article = {
                 "url": url,
@@ -104,52 +81,57 @@ for source in SOURCES:
                 "full_text": full_text or entry.get("summary", ""),
                 "source": source["name"]
             }
-            new_articles.append(article)
+            raw_articles.append(article)
             time.sleep(1.5)
     except Exception as e:
-        print(f"Ошибка при обработке {source['name']}: {e}")
+        print(f"Ошибка {source['name']}: {e}")
 
-print(f"Найдено новых статей: {len(new_articles)}")
+print(f"Собрано сырых статей: {len(raw_articles)}")
 
-# Объединение похожих
-unique_articles = []
-for article in new_articles:
-    merged = False
-    for u in unique_articles:
-        if articles_similar(article, u):
-            u["full_text"] += "\n\n[Из " + article["source"] + "]\n" + article["full_text"][:1000]
-            u["sources"] = u.get("sources", [u["source"]]) + [article["source"]]
-            merged = True
-            break
-    if not merged:
-        article["sources"] = [article["source"]]
-        unique_articles.append(article)
-
-# Формирование письма
-if not unique_articles:
-    print("Нет новых статей за последние 24 часа.")
+if not raw_articles:
+    print("Нет новых статей.")
 else:
-    digest_html = f"<h1>🎭 Шоу-бизнес дайджест — {datetime.now().strftime('%d %B %Y')}</h1><p>Найдено уникальных новостей: {len(unique_articles)}</p><hr>"
+    # === ИИ-обработка ===
+    client = Groq(api_key=GROQ_API_KEY)
+    
+    prompt = f"""Ты — главный редактор русского таблоида. 
+Сегодня {datetime.now().strftime('%d %B %Y')}.
+У меня {len(raw_articles)} свежих новостей из TMZ, Page Six, Us Weekly и др. за последние 24 часа.
 
-    for i, art in enumerate(unique_articles[:12], 1):
-        ru_title = translate_text(art["title"])
-        ru_text = translate_text(art["full_text"])
-        sources_str = ", ".join(set(art["sources"]))
-        
-        digest_html += f"""
-        <h2>{i}. {ru_title}</h2>
-        <p><strong>Источники:</strong> {sources_str}</p>
-        <p><a href="{art['url']}">Оригинал →</a></p>
-        <div style="line-height: 1.7; margin: 15px 0;">
-            {ru_text.replace('\n', '<br>')}
-        </div>
-        <hr>
-        """
+Сделай максимально яркий и вкусный дайджест:
+- Выбери самые интересные и яркие 8–12 новостей (или все, если их мало).
+- Для каждой придумай кликбейтный, но честный русский заголовок.
+- Напиши короткое (3–6 предложений), живое summary на русском.
+- Стиль: лёгкий, эмоциональный, с лёгким сплетничаньем, как в TMZ.
 
-    # Отправка
+Верни ответ строго в формате HTML:
+
+<h1>🎭 Шоу-биз: самое горячее за день</h1>
+<h2>1. Заголовок</h2>
+<p>Текст summary...</p>
+<p><a href="URL">Оригинал</a> • Источник: XYZ</p>
+<hr>
+... и так далее.
+
+Вот сырые статьи:
+"""
+    for i, art in enumerate(raw_articles, 1):
+        prompt += f"\n{i}. Источник: {art['source']}\nЗаголовок: {art['title']}\nТекст: {art['full_text'][:3000]}\n---\n"
+
+    print("Отправляем в Groq для обработки...")
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=8000
+    )
+    
+    digest_html = response.choices[0].message.content
+
+    # Отправка письма
     if SMTP_EMAIL and SMTP_PASS and TO_EMAIL:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"🎭 Шоу-биз дайджест — {datetime.now().strftime('%d.%m.%Y')}"
+        msg["Subject"] = f"🎭 Шоу-биз: самое горячее — {datetime.now().strftime('%d.%m.%Y')}"
         msg["From"] = SMTP_EMAIL
         msg["To"] = TO_EMAIL
         msg.attach(MIMEText(digest_html, "html", "utf-8"))
@@ -158,18 +140,16 @@ else:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
                 server.login(SMTP_EMAIL, SMTP_PASS)
                 server.send_message(msg)
-            print("✅ Дайджест успешно отправлен на почту!")
+            print("✅ Красивый ИИ-дайджест успешно отправлен!")
         except Exception as e:
-            print(f"❌ Ошибка отправки письма: {e}")
-    else:
-        print("❌ Не настроены SMTP секреты")
+            print(f"❌ Ошибка отправки: {e}")
 
-# Обновление seen
-for art in unique_articles:
+# Обновление истории
+for art in raw_articles:
     if art["url"] not in seen:
         seen.append(art["url"])
 
 with open(SEEN_FILE, "w", encoding="utf-8") as f:
-    json.dump(seen[-800:], f, ensure_ascii=False, indent=2)
+    json.dump(seen[-1000:], f, ensure_ascii=False, indent=2)
 
-print(f"Готово. Всего в истории: {len(seen)} URL")
+print("Готово!")
