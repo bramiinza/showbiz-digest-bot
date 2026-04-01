@@ -91,42 +91,37 @@ print(f"Собрано сырых статей: {len(raw_articles)}")
 if not raw_articles:
     print("Нет новых статей.")
 else:
-    # === ИИ-обработка ===
-    client = Groq(api_key=GROQ_API_KEY)
-    
-    prompt = f"""Ты — главный редактор русского таблоида. 
+       # === ИИ-обработка ===
+    if not GROQ_API_KEY:
+        print("❌ GROQ_API_KEY не настроен. Пропускаем ИИ-обработку.")
+        digest_html = "<h1>Шоу-биз дайджест</h1><p>Не удалось подключиться к ИИ. Сырые статьи:</p>"
+        for art in raw_articles:
+            digest_html += f"<h2>{art['title']}</h2><p>{art['full_text'][:500]}...</p><hr>"
+    else:
+        client = Groq(api_key=GROQ_API_KEY)
+        
+        prompt = f"""Ты — главный редактор русского таблоида. 
 Сегодня {datetime.now().strftime('%d %B %Y')}.
-У меня {len(raw_articles)} свежих новостей из TMZ, Page Six, Us Weekly и др. за последние 24 часа.
+Сделай яркий и вкусный дайджест из этих свежих новостей шоу-бизнеса.
 
-Сделай максимально яркий и вкусный дайджест:
-- Выбери самые интересные и яркие 8–12 новостей (или все, если их мало).
-- Для каждой придумай кликбейтный, но честный русский заголовок.
-- Напиши короткое (3–6 предложений), живое summary на русском.
-- Стиль: лёгкий, эмоциональный, с лёгким сплетничаньем, как в TMZ.
+Выбери самые интересные, придумай кликбейтные русские заголовки, напиши живые summary (3–6 предложений).
 
-Верни ответ строго в формате HTML:
+Верни только готовый HTML без лишнего текста.
 
-<h1>🎭 Шоу-биз: самое горячее за день</h1>
-<h2>1. Заголовок</h2>
-<p>Текст summary...</p>
-<p><a href="URL">Оригинал</a> • Источник: XYZ</p>
-<hr>
-... и так далее.
-
-Вот сырые статьи:
+Вот статьи:
 """
-    for i, art in enumerate(raw_articles, 1):
-        prompt += f"\n{i}. Источник: {art['source']}\nЗаголовок: {art['title']}\nТекст: {art['full_text'][:3000]}\n---\n"
+        for i, art in enumerate(raw_articles, 1):
+            prompt += f"\n{i}. [{art['source']}] Заголовок: {art['title']}\nТекст: {art['full_text'][:3500]}\n---\n"
 
-    print("Отправляем в Groq для обработки...")
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=8000
-    )
-    
-    digest_html = response.choices[0].message.content
+        print("Отправляем в Groq...")
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.75,
+            max_tokens=7000
+        )
+        
+        digest_html = response.choices[0].message.content
 
     # Отправка письма
     if SMTP_EMAIL and SMTP_PASS and TO_EMAIL:
