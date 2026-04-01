@@ -130,6 +130,13 @@ else:
         )
         
         digest_html = response.choices[0].message.content
+        # Ограничиваем количество статей
+MAX_ARTICLES = 20
+articles = articles[:MAX_ARTICLES]
+
+# Сокращаем текст каждой статьи
+for a in articles:
+    a['summary'] = a['summary'][:300]  # оставляем первые 300 символов
 
     # Отправка письма
     if SMTP_EMAIL and SMTP_PASS and TO_EMAIL:
