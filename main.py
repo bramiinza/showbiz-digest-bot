@@ -23,11 +23,10 @@ SMTP_EMAIL = os.getenv("SMTP_EMAIL")
 SMTP_PASS = os.getenv("SMTP_PASS")
 TO_EMAIL = os.getenv("TO_EMAIL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-RUN_MODE = os.getenv("RUN_MODE", "auto")   # manual или auto
+RUN_MODE = os.getenv("RUN_MODE", "auto")
 
 SEEN_FILE = "seen_articles.json"
 
-# Загрузка истории
 seen = []
 if os.path.exists(SEEN_FILE):
     try:
@@ -55,7 +54,7 @@ def get_full_text(url):
         soup = BeautifulSoup(r.text, "lxml")
         for tag in soup(["script", "style", "header", "footer", "nav", "aside"]):
             tag.decompose()
-        return soup.get_text(separator="\n", strip=True)[:5000]
+        return soup.get_text(separator="\n", strip=True)[:4500]
     except:
         return ""
 
@@ -70,8 +69,6 @@ for source in SOURCES:
             if not is_recent(entry):
                 continue
             url = entry.link
-            
-            # В ручном режиме НЕ пропускаем уже виденные
             if RUN_MODE == "auto" and url in seen:
                 continue
 
@@ -79,57 +76,69 @@ for source in SOURCES:
             article = {
                 "url": url,
                 "title": entry.title,
-                "summary": entry.get("summary", ""),
                 "full_text": full_text or entry.get("summary", ""),
                 "source": source["name"]
             }
             raw_articles.append(article)
-            time.sleep(1.5)
+            time.sleep(1.2)
     except Exception as e:
         print(f"Ошибка {source['name']}: {e}")
 
 print(f"Собрано сырых статей: {len(raw_articles)}")
 
 if not raw_articles:
-    print("Нет новых статей.")
+    digest_html = "<h1>🎭 Шоу-биз дайджест</h1><p>Сегодня новых статей нет.</p>"
 else:
-    # === ИИ-обработка с фильтром по мировым звёздам ===
     if not GROQ_API_KEY:
         print("❌ GROQ_API_KEY не настроен.")
         digest_html = "<h1>Шоу-биз дайджест</h1><p>ИИ не подключён.</p>"
     else:
         client = Groq(api_key=GROQ_API_KEY)
         
-        prompt = f"""Ты — главный редактор русского таблоида о шоу-бизнесе.
-Сегодня {datetime.now().strftime('%d %B %Y')}.
-Режим запуска: {RUN_MODE}.
-
-Сделай максимально яркий и вкусный дайджест ТОЛЬКО по мировым звёздам, которых хорошо знают в России 
-(Taylor Swift, Zendaya, Kardashians, Leonardo DiCaprio, The Rock, Kylie Jenner, Timothée Chalamet, Billie Eilish, Drake, Marvel-актёры и подобные глобальные имена).
-
-Пропускай новости про чисто американских локальных знаменитостей, которых в России почти никто не знает.
-
-Выбери самые интересные 5–6 новостей.
-Для каждой:
-- Придумай не кликбейтный, но привлекательный русский заголовок.
-- Напиши живое summary (3–6 предложений) в таблоидном стиле.
-
-Верни ответ строго в формате HTML (никакого лишнего текста).
-
-Вот сырые статьи:
-"""
-        for i, art in enumerate(raw_articles, 1):
-            prompt += f"\n{i}. [{art['source']}] Заголовок: {art['title']}\nТекст: {art['full_text'][:3500]}\n---\n"
-
-        print("Отправляем в Groq...")
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.75,
-            max_tokens=7000
-        )
+        # Разбиваем на чанки по 8 статей, чтобы не превышать лимит токенов
+        chunk_size = 8
+        all_html_parts = []
         
-        digest_html = response.choices[0].message.content
+        for i in range(0, len(raw_articles), chunk_size):
+            chunk = raw_articles[i:i+chunk_size]
+            print(f"Обрабатываем чанк {i//chunk_size + 1} из {len(raw_articles)//chunk_size + 1}...")
+            
+            prompt = f"""Ты — главный редактор русского таблоида.
+Сегодня {datetime.now().strftime('%d %B %Y')}. Режим: {RUN_MODE}.
+
+Создай яркий дайджест **только про глобальных звёзд**, которых хорошо знают в России 
+(Taylor Swift, Zendaya, Kylie Jenner, Kim Kardashian, Leonardo DiCaprio, The Rock, Timothée Chalamet, Billie Eilish, Drake, Marvel/DC актёры и подобные).
+
+Пропускай новости про чисто локальных американских знаменитостей.
+
+Для каждой выбранной новости:
+- Придумай сочный русский заголовок
+- Напиши живое summary (3–6 предложений) в лёгком таблоидном стиле
+
+Верни **только** HTML-фрагмент без объяснений.
+
+Вот статьи для обработки:
+"""
+            for j, art in enumerate(chunk, 1):
+                prompt += f"\n{j}. [{art['source']}] Заголовок: {art['title']}\nТекст: {art['full_text'][:2800]}\n---\n"
+
+            try:
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.75,
+                    max_tokens=4000
+                )
+                part = response.choices[0].message.content.strip()
+                all_html_parts.append(part)
+                time.sleep(3)  # небольшая пауза между запросами
+            except Exception as e:
+                print(f"Ошибка Groq в чанке: {e}")
+                all_html_parts.append(f"<h2>Ошибка обработки чанка</h2>")
+
+        # Склеиваем все части
+        digest_html = f"<h1>🎭 Шоу-биз: самое горячее — {datetime.now().strftime('%d %B %Y')}</h1>\n"
+        digest_html += "\n".join(all_html_parts)
 
     # Отправка письма
     if SMTP_EMAIL and SMTP_PASS and TO_EMAIL:
@@ -143,16 +152,16 @@ else:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
                 server.login(SMTP_EMAIL, SMTP_PASS)
                 server.send_message(msg)
-            print("✅ ИИ-дайджест успешно отправлен!")
+            print("✅ Дайджест успешно отправлен!")
         except Exception as e:
             print(f"❌ Ошибка отправки: {e}")
 
-# Обновляем историю (в обоих режимах)
+# Обновляем историю
 for art in raw_articles:
     if art["url"] not in seen:
         seen.append(art["url"])
 
 with open(SEEN_FILE, "w", encoding="utf-8") as f:
-    json.dump(seen[-1000:], f, ensure_ascii=False, indent=2)
+    json.dump(seen[-1500:], f, ensure_ascii=False, indent=2)
 
 print("Готово!")
